@@ -8,6 +8,7 @@ page - you did the login yourself, like a normal person.
 
     python import_cookies.py
 """
+import argparse
 import json
 import re
 import sys
@@ -97,6 +98,23 @@ def parse_cookies(cookie_str: str) -> list[dict]:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Import a FirstCry session from your browser")
+    ap.add_argument("--account", metavar="NAME",
+                    help="save as accounts/NAME.json instead of session.json, "
+                         "so several logins can be watched at once")
+    args = ap.parse_args()
+
+    if args.account:
+        config.ACCOUNTS_DIR.mkdir(exist_ok=True)
+        target = config.ACCOUNTS_DIR / f"{args.account}.json"
+        print(f"\n Importing for account: {args.account}")
+        print(f" Will save to: {target}")
+        if target.exists():
+            print(" (this will replace the existing session for that account)")
+    else:
+        target = config.SESSION_FILE
+
     print(INSTRUCTIONS)
     blob = read_paste()
 
@@ -116,10 +134,10 @@ def main() -> int:
         print("\n Found a cookie header but couldn't parse any name=value pairs.")
         return 1
 
-    with open(config.SESSION_FILE, "w", encoding="utf-8") as fh:
+    with open(target, "w", encoding="utf-8") as fh:
         json.dump({"cookies": cookies, "origins": []}, fh, indent=2)
 
-    print(f"\n Imported {len(cookies)} cookies -> {config.SESSION_FILE}")
+    print(f"\n Imported {len(cookies)} cookies -> {target}")
     names = [c["name"] for c in cookies]
     print(" Cookie names:", ", ".join(names[:15]) + (" ..." if len(names) > 15 else ""))
 
@@ -132,7 +150,10 @@ def main() -> int:
         print(" WARNING: none of these look like login tokens. You may have")
         print(" copied the request before logging in. Check with:")
 
-    print("\n Now run:  python check_session.py")
+    if args.account:
+        print(f"\n Now run:  python bot2_wishlist.py --account {args.account}")
+    else:
+        print("\n Now run:  python check_session.py")
     return 0
 
 
