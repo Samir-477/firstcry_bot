@@ -247,12 +247,16 @@ def send_status(deliverable: list[dict], waiting: int, pincode: str,
 
 
 def send_session_expired(account: str | None = None) -> None:
-    # Give the exact command, account and all - you'll be reading this on a
-    # phone and wanting to copy it, not work out which flag to add.
-    flag = f" --account {account}" if account and account != "default" else ""
+    # Lead with the route that works from anywhere. Telling someone to SSH
+    # into a server is useless when they're reading this on a bus.
+    named = f" {account}" if account and account != "default" else ""
     send(f"⚠️ <b>LOGIN EXPIRED{_who(account)}</b>\n\n"
-         "The bot has been signed out of FirstCry and has stopped watching "
-         "this account.\n\n"
-         f"<b>To fix:</b>\n<code>python import_cookies.py{flag}</code>\n\n"
-         "It picks the new login up on its own within 5 minutes — "
-         "no restart needed.")
+         "FirstCry has signed the bot out, so this account isn't being "
+         "watched.\n\n"
+         "<b>To fix — from any laptop:</b>\n"
+         "1. Log in to FirstCry\n"
+         "2. Open checkout.firstcry.com/pay\n"
+         "3. F12 → Network → F5 → right-click the top row → "
+         "<b>Copy as cURL</b>\n"
+         f"4. Send me:  <code>/session{named}</code> then paste\n\n"
+         "I'll verify it and start watching again straight away.")

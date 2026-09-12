@@ -74,6 +74,35 @@ python bot2_wishlist.py --status              # all accounts
 python bot2_wishlist.py --account samir       # just one
 ```
 
+### Controlling it from Telegram
+
+Message the bot privately:
+
+| Command | Does |
+|---------|------|
+| `/status` | What can be delivered right now |
+| `/cart` | Everything in the cart |
+| `/health` | How old each login is |
+| `/session` | Refresh a login — see below |
+| `/pause` / `/resume` | Stop and start watching |
+| `/help` | The list |
+
+**Refreshing a login without SSH.** FirstCry's login page runs reCAPTCHA, so
+a human has to do the login itself — but the new cookies don't have to reach
+the server over SSH:
+
+1. Log in to FirstCry in any browser
+2. Open https://checkout.firstcry.com/pay
+3. F12 → Network → F5 → right-click the top row → **Copy as cURL**
+4. Send the bot `/session` and paste
+
+It verifies the login works before accepting it, then resumes watching. This
+is the whole answer to "how do I keep a hosted bot logged in".
+
+**Commands only work in a private chat.** A session paste in a group would
+hand your FirstCry login to everyone in it, so `/session` sent to a group is
+ignored outright.
+
 ### What is NOT in this repo
 
 `.env`, `session.json` and `state/` are gitignored. The first two are

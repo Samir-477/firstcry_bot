@@ -22,6 +22,7 @@ import config
 import firstcry_account as fa
 import notifier
 import session_health
+import telegram_commands
 
 stop = threading.Event()
 
@@ -45,6 +46,12 @@ def run_bot1() -> None:
                 f"{config.BOT1_INTERVAL_HOURS:g}h")
     while not stop.is_set():
         started = time.monotonic()
+
+        if telegram_commands.paused.is_set():
+            if not wait(30):
+                return
+            continue
+
         try:
             found = bot1.check_once()
             if found:
@@ -82,6 +89,12 @@ def run_bot2(account: config.Account) -> None:
 
     while not stop.is_set():
         started = time.monotonic()
+
+        if telegram_commands.paused.is_set():
+            if not wait(5):
+                return
+            continue
+
         try:
             items, alerts = bot2.check_once(account, state)
             state = {"items": items}
@@ -99,12 +112,15 @@ def run_bot2(account: config.Account) -> None:
             if not warned_about_age and session_health.should_warn(account):
                 warned_about_age = True
                 log(tag, "session is nearing its usual lifetime")
+                named = ("" if account.name == "default"
+                         else f" {account.name}")
                 notifier.send(
-                    f"⏳ <b>Session ageing{notifier._who(account.name)}</b>\n\n"
+                    f"⏳ <b>Login ageing{notifier._who(account.name)}</b>\n\n"
                     f"{session_health.status(account)}\n\n"
-                    f"Refresh it before it goes:\n"
-                    f"<code>python import_cookies.py "
-                    f"--account {account.name}</code>")
+                    f"Refresh it before it goes — send me "
+                    f"<code>/session{named}</code> with a fresh cURL "
+                    f"from checkout.firstcry.com/pay.\n\n"
+                    f"See /help for the steps.")
 
             # Only log every cycle when something happened; otherwise a short
             # heartbeat every 30 minutes so the terminal stays readable.
@@ -164,6 +180,8 @@ def main() -> int:
           + (", ".join(a.name for a in _accounts) if _accounts else "NONE"))
     print(f"  Auto-add     : {'on' if config.AUTO_ADD_TO_CART else 'off'}")
     print(f"  Telegram     : {'connected' if config.telegram_ready() else 'NOT SET UP'}")
+    if config.telegram_ready():
+        print("  Commands     : /status /cart /health /session /pause /help")
     print("=" * 62)
     print("  Ctrl+C to stop")
     print("=" * 62 + "\n")
@@ -173,6 +191,11 @@ def main() -> int:
         log("SETUP", "Fix with: python setup_telegram.py")
 
     threads = [threading.Thread(target=run_bot1, name="bot1", daemon=True)]
+
+    if config.telegram_ready():
+        threads.append(threading.Thread(target=telegram_commands.listen,
+                                        args=(stop,), name="telegram",
+                                        daemon=True))
 
     if not _accounts:
         log("SETUP", "No account session found - Bot 2 cannot run.")
