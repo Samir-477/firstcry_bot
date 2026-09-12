@@ -21,6 +21,7 @@ import bot2_wishlist as bot2
 import config
 import firstcry_account as fa
 import notifier
+import session_health
 
 stop = threading.Event()
 
@@ -65,8 +66,10 @@ def run_bot2(account: config.Account) -> None:
     interval = config.BOT2_INTERVAL_SECONDS
     log(tag, f"Watching shortlist deliverability every {interval:g}s "
              f"(pincode {account.pincode})")
+    log(tag, session_health.status(account))
     state = bot2.load_state(account)
     quiet_since = None
+    warned_about_age = False
 
     # A single failed read is not proof the session is dead - FirstCry serves
     # the odd error page, and those look identical to being logged out. Only
@@ -92,6 +95,17 @@ def run_bot2(account: config.Account) -> None:
             consecutive_failures = 0
             expiry_reported = False
 
+            # Nudge before the session dies, once we know how long they last.
+            if not warned_about_age and session_health.should_warn(account):
+                warned_about_age = True
+                log(tag, "session is nearing its usual lifetime")
+                notifier.send(
+                    f"⏳ <b>Session ageing{notifier._who(account.name)}</b>\n\n"
+                    f"{session_health.status(account)}\n\n"
+                    f"Refresh it before it goes:\n"
+                    f"<code>python import_cookies.py "
+                    f"--account {account.name}</code>")
+
             # Only log every cycle when something happened; otherwise a short
             # heartbeat every 30 minutes so the terminal stays readable.
             now = time.time()
@@ -115,6 +129,10 @@ def run_bot2(account: config.Account) -> None:
                 log(tag, "Fix with: python import_cookies.py")
                 log(tag, f"Still retrying every {RETRY_WHEN_EXPIRED:.0f}s - "
                             f"drop in a new session.json and it resumes itself.")
+                lived = session_health.record_death(account)
+                if lived is not None:
+                    log(tag, f"that session lasted {lived:.1f} days - recorded, "
+                             f"so future ones can be predicted")
                 notifier.send_session_expired(account.name)
                 expiry_reported = True
         except requests.RequestException as exc:
