@@ -1,10 +1,10 @@
-"""Telegram alerts, formatted to be read on a phone at a glance.
+"""Telegram alerts, written to be understood in one glance on a phone.
 
-Design rules kept deliberately simple:
-  - one clear headline, then a blank line
-  - each product is a numbered block, never a wall of text
-  - product name is the tappable link, on its own line
-  - one compact meta line underneath: price - stock - eta
+Design rules:
+  - the headline says what to DO, not what the bot did
+  - one product per card: name, price, urgency, delivery date
+  - stock is translated into plain language ("Only 2 left" beats "serv=2")
+  - exactly one call to action, at the bottom, impossible to miss
   - nothing else competing for attention
 """
 import html
@@ -18,6 +18,12 @@ _API = "https://api.telegram.org/bot{token}/sendMessage"
 
 # Telegram's hard limit is 4096 characters; leave headroom for the header.
 _MAX_CHARS = 3600
+
+CART_URL = "https://checkout.firstcry.com/pay"
+SHORTLIST_URL = "https://www.firstcry.com/myshortlist"
+# FirstCry has no clean /hot-wheels brand page - both the obvious guesses
+# (/hot-wheels/... and /brand/hot-wheels) 404. Search is what actually works.
+BROWSE_URL = "https://www.firstcry.com/searchresult?searchstring=hot%20wheels"
 
 
 # --------------------------------------------------------------------------
@@ -75,7 +81,13 @@ def _send_blocks(header: str, blocks: list[str], footer: str = "") -> None:
 # Formatting helpers
 # --------------------------------------------------------------------------
 
-def _name(text: str, limit: int = 62) -> str:
+def _who(account: str | None) -> str:
+    """Label which account an alert is about, but stay quiet when there is
+    only one - no point putting "default" on every message."""
+    return f" · {html.escape(account)}" if account and account != "default" else ""
+
+
+def _name(text: str, limit: int = 58) -> str:
     text = " ".join((text or "").split())
     if len(text) > limit:
         text = text[:limit - 1].rstrip() + "…"
@@ -85,181 +97,173 @@ def _name(text: str, limit: int = 62) -> str:
 def _rupees(value) -> str:
     """299 -> '₹299', 269.1 -> '₹269'."""
     try:
-        n = float(value)
+        return f"₹{int(round(float(value))):,}"
     except (TypeError, ValueError):
         return ""
-    return f"₹{int(round(n)):,}"
 
 
-def _price_bit(price, mrp, discount) -> str:
-    """'₹269  (was ₹299, -10%)' or just '₹299'."""
+def _price_line(item: dict) -> str:
+    """'₹809  ₹899  −10% off' or just '₹299'."""
+    price = item.get("price")
+    mrp = item.get("mrp") if item.get("mrp") is not None else item.get("price")
+    discount = item.get("discount")
+
     now = _rupees(price if price not in (None, "") else mrp)
     if not now:
         return ""
     try:
-        has_disc = float(discount or 0) > 0 and float(mrp or 0) > float(price or 0)
+        discounted = (float(discount or 0) > 0
+                      and float(mrp or 0) > float(price or 0))
     except (TypeError, ValueError):
-        has_disc = False
-    if has_disc:
-        return f"{now}  <s>{_rupees(mrp)}</s> −{int(float(discount))}%"
-    return now
+        discounted = False
+    if discounted:
+        return (f"<b>{now}</b>  <s>{_rupees(mrp)}</s>  "
+                f"−{int(float(discount))}% off")
+    return f"<b>{now}</b>"
 
 
-def _date_bit(raw) -> str:
+def _date(raw) -> str:
     """'2026-09-14T00:00:00' -> '14 Sep'."""
     if not raw:
         return ""
     text = str(raw)[:10]
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
     try:
-        y, m, d = text.split("-")
-        months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        _, m, d = text.split("-")
         return f"{int(d)} {months[int(m) - 1]}"
     except (ValueError, IndexError):
         return text
 
 
-def _meta(parts: list[str]) -> str:
-    """Join the non-empty bits with a middot separator."""
-    return "  ·  ".join(p for p in parts if p)
+def _urgency(stock) -> str:
+    """Translate a stock number into how urgently you should move.
+
+    "447 in stock" and "2 in stock" mean very different things when you are
+    deciding whether to drop what you're doing, so say which it is.
+    """
+    try:
+        n = int(stock)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    if n <= 3:
+        return f"🔥 Only {n} left"
+    if n <= 15:
+        return f"⚠️ {n} left"
+    return f"📦 {n} in stock"
 
 
-def _block(index: int, name: str, url: str, meta: str, note: str = "") -> str:
-    out = f"\n<b>{index}.</b> <a href=\"{url}\">{_name(name)}</a>\n"
-    if meta:
-        out += f"     {meta}\n"
-    if note:
-        out += f"     {note}\n"
+def _card(item: dict, index: int | None = None,
+          stock_key: str = "servicable") -> str:
+    """One product, laid out to be read at a glance."""
+    label = f"{index}. " if index is not None else ""
+    out = f"\n<b>{label}<a href=\"{item['url']}\">{_name(item['name'])}</a></b>\n"
+
+    price = _price_line(item)
+    if price:
+        out += price + "\n"
+
+    bits = []
+    urgency = _urgency(item.get(stock_key) or item.get("stock"))
+    if urgency:
+        bits.append(urgency)
+    if item.get("eta"):
+        bits.append(f"🚚 by {_date(item['eta'])}")
+    if bits:
+        out += "  ·  ".join(bits) + "\n"
+
+    if item.get("added"):
+        out += f"🛒 {html.escape(str(item['added']))}\n"
     return out
 
 
+def _cta(text: str, url: str) -> str:
+    return f"\n<b>👉 <a href=\"{url}\">{text}</a></b>\n"
+
+
 # --------------------------------------------------------------------------
-# Bot 1 - new arrivals and restocks
+# Bot 1 - new listings
 # --------------------------------------------------------------------------
 
 def send_new_products(new_items: list[dict],
                       restocked: list[dict] | None = None) -> None:
+    """Bot 1: Hot Wheels that were not on FirstCry before."""
     restocked = restocked or []
     if not new_items and not restocked:
         return
 
-    if new_items and restocked:
-        title = f"{len(new_items)} new  ·  {len(restocked)} back in stock"
-    elif new_items:
-        title = f"{len(new_items)} new Hot Wheels" if len(new_items) > 1 else "New Hot Wheels"
-    else:
-        title = (f"{len(restocked)} back in stock" if len(restocked) > 1
-                 else "Back in stock")
+    count = len(new_items) + len(restocked)
+    what = "NEW HOT WHEELS" if count == 1 else f"{count} NEW HOT WHEELS"
+    header = (f"🚨 <b>{what}</b>\n"
+              f"<i>just listed on FirstCry</i>\n")
 
-    header = f"🚨 <b>{title}</b>\n"
+    # Bot 1's products use different field names to the cart's.
+    def normalise(p: dict) -> dict:
+        return {**p,
+                "price": p.get("discounted_price") or p.get("price"),
+                "mrp": p.get("price"),
+                "servicable": p.get("stock")}
 
-    blocks = []
-    if new_items:
-        blocks.append("\n<b>NEW LISTINGS</b>\n")
-        for i, p in enumerate(new_items, 1):
-            meta = _meta([_price_bit(p.get("discounted_price"), p.get("price"),
-                                     p.get("discount")),
-                          f"{p.get('stock')} in stock"])
-            blocks.append(_block(i, p["name"], p["url"], meta))
-    if restocked:
-        blocks.append("\n<b>BACK IN STOCK</b>\n")
-        for i, p in enumerate(restocked, 1):
-            meta = _meta([_price_bit(p.get("discounted_price"), p.get("price"),
-                                     p.get("discount")),
-                          f"{p.get('stock')} in stock"])
-            blocks.append(_block(i, p["name"], p["url"], meta))
-
-    _send_blocks(header, blocks)
+    blocks = [_card(normalise(p), i)
+              for i, p in enumerate(new_items + restocked, 1)]
+    _send_blocks(header, blocks, _cta("BROWSE ALL HOT WHEELS", BROWSE_URL))
 
 
 # --------------------------------------------------------------------------
-# Bot 2 - cart deliverability and wishlist restocks
+# Bot 2 - deliverability
 # --------------------------------------------------------------------------
-
-def _who(account: str | None) -> str:
-    """Label which account an alert is about, but stay quiet when there's
-    only the one - no point cluttering every message with "default"."""
-    return f" · {html.escape(account)}" if account and account != "default" else ""
-
 
 def send_deliverable(items: list[dict], pincode: str,
                      account: str | None = None) -> None:
-    """The headline alert: cart items you can finally order."""
+    """The one that matters: things you can actually order right now."""
     if not items:
         return
-    what = "1 item is" if len(items) == 1 else f"{len(items)} items are"
-    header = (f"🟢 <b>Deliverable now{_who(account)}</b>\n"
-              f"<i>{what} now shippable to {pincode}</i>\n")
-
-    blocks = []
-    for i, it in enumerate(items, 1):
-        meta = _meta([_price_bit(it.get("price"), it.get("mrp"), it.get("discount")),
-                      f"{it.get('servicable')} in stock",
-                      f"by {_date_bit(it.get('eta'))}" if it.get("eta") else ""])
-        blocks.append(_block(i, it["name"], it["url"], meta))
-
-    footer = "\n➡️ <a href=\"https://checkout.firstcry.com/pay\">Open cart</a>\n"
-    _send_blocks(header, blocks, footer)
+    count = "1 item" if len(items) == 1 else f"{len(items)} items"
+    header = (f"🟢 <b>READY TO ORDER{_who(account)}</b>\n"
+              f"<i>{count} can now be delivered to {pincode}</i>\n")
+    blocks = [_card(it, i) for i, it in enumerate(items, 1)]
+    _send_blocks(header, blocks, _cta("OPEN CART TO BUY", CART_URL))
 
 
-def send_back_in_stock(items: list[dict]) -> None:
-    """Wishlist items that are available again."""
+def send_back_in_stock(items: list[dict], account: str | None = None) -> None:
+    """Shortlist items that are available again."""
     if not items:
         return
-    what = "item" if len(items) == 1 else "items"
-    header = f"🔄 <b>{len(items)} wishlist {what} back in stock</b>\n"
-
-    blocks = []
-    for i, it in enumerate(items, 1):
-        meta = _meta([_price_bit(it.get("price"), it.get("mrp"), None),
-                      f"{it.get('stock')} in stock"])
-        note = ""
-        added = it.get("added")
-        if added == "added to cart":
-            note = "🛒 <b>Added to your cart</b>"
-        elif added == "already in cart":
-            note = "🛒 already in cart"
-        elif added:
-            note = f"⚠️ {html.escape(str(added))}"
-        blocks.append(_block(i, it["name"], it["url"], meta, note))
-
-    footer = "\n➡️ <a href=\"https://checkout.firstcry.com/pay\">Open cart</a>\n"
-    _send_blocks(header, blocks, footer)
+    count = "1 item" if len(items) == 1 else f"{len(items)} items"
+    header = (f"🔄 <b>BACK IN STOCK{_who(account)}</b>\n"
+              f"<i>{count} from your shortlist</i>\n")
+    blocks = [_card(it, i, stock_key="stock") for i, it in enumerate(items, 1)]
+    _send_blocks(header, blocks, _cta("OPEN CART", CART_URL))
 
 
 def send_status(deliverable: list[dict], waiting: int, pincode: str,
-                title: str = "Cart status", account: str | None = None) -> None:
-    """A snapshot of where things stand right now.
-
-    Unlike the alerts, this reports current state rather than a change - for
-    when you want to see what's orderable without waiting for something to
-    flip.
-    """
-    header = (f"📋 <b>{title}{_who(account)}</b>\n"
-              f"<i>{len(deliverable)} deliverable to {pincode}"
-              f"{f', {waiting} still waiting' if waiting else ''}</i>\n")
+                title: str = "CART STATUS", account: str | None = None) -> None:
+    """A snapshot of where things stand, rather than a change."""
+    header = f"📋 <b>{title.upper()}{_who(account)}</b>\n"
 
     if not deliverable:
-        send(header + "\nNothing is deliverable right now. Still watching.")
+        send(header
+             + f"\nNothing can be delivered to {pincode} yet.\n"
+             + f"\n<b>{waiting}</b> item(s) are parked in your cart and "
+               f"being checked every cycle.\n"
+             + "\nYou'll get a message the moment one becomes available.")
         return
 
-    blocks = []
-    for i, it in enumerate(deliverable, 1):
-        meta = _meta([_price_bit(it.get("price"), it.get("mrp"), it.get("discount")),
-                      f"{it.get('servicable')} in stock",
-                      f"by {_date_bit(it.get('eta'))}" if it.get("eta") else ""])
-        blocks.append(_block(i, it["name"], it["url"], meta))
-
-    footer = "\n➡️ <a href=\"https://checkout.firstcry.com/pay\">Open cart</a>\n"
-    _send_blocks(header, blocks, footer)
+    ready = "1 item" if len(deliverable) == 1 else f"{len(deliverable)} items"
+    header += f"<i>{ready} ready · {waiting} still waiting</i>\n"
+    blocks = [_card(it, i) for i, it in enumerate(deliverable, 1)]
+    _send_blocks(header, blocks, _cta("OPEN CART TO BUY", CART_URL))
 
 
 def send_session_expired(account: str | None = None) -> None:
     # Give the exact command, account and all - you'll be reading this on a
     # phone and wanting to copy it, not work out which flag to add.
     flag = f" --account {account}" if account and account != "default" else ""
-    send(f"⚠️ <b>FirstCry session expired{_who(account)}</b>\n\n"
-         "Bot 2 has stopped watching this account. Other accounts carry on.\n\n"
-         f"To fix:\n<code>python import_cookies.py{flag}</code>\n\n"
-         "It picks the new session up on its own within 5 minutes - "
+    send(f"⚠️ <b>LOGIN EXPIRED{_who(account)}</b>\n\n"
+         "The bot has been signed out of FirstCry and has stopped watching "
+         "this account.\n\n"
+         f"<b>To fix:</b>\n<code>python import_cookies.py{flag}</code>\n\n"
+         "It picks the new login up on its own within 5 minutes — "
          "no restart needed.")
