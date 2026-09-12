@@ -1,12 +1,13 @@
-"""Logged-in FirstCry client: reads your wishlist and your cart.
+"""Logged-in FirstCry client: reads your shortlist and cart, and edits the cart.
 
-Uses the session cookies saved by import_cookies.py / login_once.py. No password
-is ever involved, and every call here is a READ - nothing is bought, added or
-removed.
+Uses the session cookies saved by import_cookies.py. No password is ever
+involved. Nothing here buys anything - adding to and removing from the cart
+is as far as the writes go.
 
-Endpoints were discovered by reading FirstCry's own front-end JavaScript:
-  wishlist -> POST https://www.firstcry.com/api/shortlist   (myshortlist.min.1.6.js)
-  cart     -> GET  https://checkout.firstcry.com/pay        (embedded JSON)
+Endpoints were found by reading FirstCry's own front-end JavaScript:
+  shortlist -> POST https://www.firstcry.com/api/shortlist  (myshortlist.min.1.6.js)
+  cart read -> GET  https://checkout.firstcry.com/pay       (embedded JSON)
+  cart write-> POST /svcs/CommonService.svc/SaveCartDetail  (cart-deployment.js)
 """
 import json
 import urllib.parse
@@ -228,11 +229,3 @@ def add_to_cart(cookies: dict[str, str], pid: str,
 def remove_from_cart(cookies: dict[str, str], pid: str) -> tuple[bool, str]:
     """Take one product back out of the cart."""
     return _cart_write(cookies, pid, "remove")
-
-
-def session_alive(cookies: dict[str, str] | None = None) -> bool:
-    try:
-        fetch_cart(cookies or load_cookies())
-        return True
-    except (SessionExpired, requests.RequestException):
-        return False

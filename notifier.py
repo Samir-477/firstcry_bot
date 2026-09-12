@@ -227,17 +227,6 @@ def send_deliverable(items: list[dict], pincode: str,
     _send_blocks(header, blocks, _cta("OPEN CART TO BUY", CART_URL))
 
 
-def send_back_in_stock(items: list[dict], account: str | None = None) -> None:
-    """Shortlist items that are available again."""
-    if not items:
-        return
-    count = "1 item" if len(items) == 1 else f"{len(items)} items"
-    header = (f"🔄 <b>BACK IN STOCK{_who(account)}</b>\n"
-              f"<i>{count} from your shortlist</i>\n")
-    blocks = [_card(it, i, stock_key="stock") for i, it in enumerate(items, 1)]
-    _send_blocks(header, blocks, _cta("OPEN CART", CART_URL))
-
-
 def send_status(deliverable: list[dict], waiting: int, pincode: str,
                 title: str = "CART STATUS", account: str | None = None) -> None:
     """A snapshot of where things stand, rather than a change."""

@@ -21,9 +21,14 @@ The cart is the only trustworthy source.
 
 It never buys anything. Adding to the cart is as far as it goes.
 
-    python bot2_wishlist.py            # check once, then exit
-    python bot2_wishlist.py --loop     # keep running, checks every 60s
-    python bot2_wishlist.py --reset    # forget state and re-seed
+    python bot2_wishlist.py                    # check once, then exit
+    python bot2_wishlist.py --loop             # keep running
+    python bot2_wishlist.py --status           # Telegram a snapshot now
+    python bot2_wishlist.py --reset            # forget state and re-seed
+    python bot2_wishlist.py --account SAI      # just one account
+
+Every account in accounts/ is watched. With that folder empty it falls back
+to a single session.json in the project root.
 """
 import argparse
 import json
