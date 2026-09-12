@@ -67,12 +67,28 @@ def run_bot2() -> None:
     state = bot2.load_state()
     quiet_since = None
 
+    # A single failed read is not proof the session is dead - FirstCry serves
+    # the odd error page, and those look identical to being logged out. Only
+    # declare expiry after several in a row, and never give up entirely: if
+    # a fresh session.json is dropped in, the bot should heal on its own.
+    consecutive_failures = 0
+    expiry_reported = False
+    FAILURES_BEFORE_ALERT = 3
+    RETRY_WHEN_EXPIRED = 300.0
+
     while not stop.is_set():
         started = time.monotonic()
         try:
             items, alerts = bot2.check_once(state)
             state = {"items": items}
             bot2.save_state(items)
+
+            if expiry_reported:
+                log("BOT2", "session is working again - back to normal")
+                notifier.send("✅ <b>FirstCry session restored</b>\n\n"
+                              "Bot 2 is watching your cart again.")
+            consecutive_failures = 0
+            expiry_reported = False
 
             # Only log every cycle when something happened; otherwise a short
             # heartbeat every 30 minutes so the terminal stays readable.
@@ -87,19 +103,29 @@ def run_bot2() -> None:
                             f"{deliverable} deliverable to {config.PINCODE}")
 
         except fa.SessionExpired as exc:
-            log("BOT2", f"SESSION EXPIRED: {exc}")
-            log("BOT2", "stopping. Fix with: python import_cookies.py")
-            notifier.send_session_expired()
-            return
+            consecutive_failures += 1
+            if consecutive_failures < FAILURES_BEFORE_ALERT:
+                log("BOT2", f"session read failed ({consecutive_failures}/"
+                            f"{FAILURES_BEFORE_ALERT}) - could be a blip: {exc}")
+            elif not expiry_reported:
+                log("BOT2", f"SESSION EXPIRED after {consecutive_failures} "
+                            f"failed checks: {exc}")
+                log("BOT2", "Fix with: python import_cookies.py")
+                log("BOT2", f"Still retrying every {RETRY_WHEN_EXPIRED:.0f}s - "
+                            f"drop in a new session.json and it resumes itself.")
+                notifier.send_session_expired()
+                expiry_reported = True
         except requests.RequestException as exc:
             log("BOT2", f"network problem, retrying: {exc}")
         except Exception as exc:
             log("BOT2", f"unexpected error, continuing: {exc}")
 
         # Sleep only what's left of the interval - the checks themselves take
-        # 20-30s, so sleeping a full interval afterwards made a 60s setting
-        # run every ~87s.
-        if not wait(max(0.0, interval - (time.monotonic() - started))):
+        # a couple of seconds, so sleeping a full interval afterwards made a
+        # 60s setting run every ~87s. Back right off while expired: there is
+        # no point hammering a dead session every few seconds.
+        gap = RETRY_WHEN_EXPIRED if expiry_reported else interval
+        if not wait(max(0.0, gap - (time.monotonic() - started))):
             return
 
 

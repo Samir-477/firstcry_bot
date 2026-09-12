@@ -7,6 +7,7 @@ same way Bot 2 will, and reports what FirstCry says back.
 """
 import json
 import sys
+import time
 
 import requests
 
@@ -47,7 +48,11 @@ def check() -> bool:
         print("   Fix: run  python login_once.py  and log in fully before pressing Enter.")
         return False
 
-    print(f"Found {len(cookies)} FirstCry cookies. Testing them against your shortlist...")
+    # Cookies imported from a cURL paste carry no expiry dates, so age is
+    # the only clue we have about how close this session is to dying.
+    age_days = (time.time() - config.SESSION_FILE.stat().st_mtime) / 86400
+    print(f"Session file is {age_days:.1f} days old ({len(cookies)} FirstCry cookies).")
+    print("Testing it against your shortlist...")
 
     try:
         resp = requests.get(SHORTLIST_URL, cookies=cookies, headers=HEADERS,
