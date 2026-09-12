@@ -60,11 +60,12 @@ def run_bot1() -> None:
 # Bot 2 - shortlist deliverability, every minute
 # --------------------------------------------------------------------------
 
-def run_bot2() -> None:
+def run_bot2(account: config.Account) -> None:
+    tag = f"BOT2:{account.name}" if account.name != "default" else "BOT2"
     interval = config.BOT2_INTERVAL_SECONDS
-    log("BOT2", f"Watching shortlist deliverability every {interval:g}s "
-                f"(pincode {config.PINCODE})")
-    state = bot2.load_state()
+    log(tag, f"Watching shortlist deliverability every {interval:g}s "
+             f"(pincode {account.pincode})")
+    state = bot2.load_state(account)
     quiet_since = None
 
     # A single failed read is not proof the session is dead - FirstCry serves
@@ -79,14 +80,15 @@ def run_bot2() -> None:
     while not stop.is_set():
         started = time.monotonic()
         try:
-            items, alerts = bot2.check_once(state)
+            items, alerts = bot2.check_once(account, state)
             state = {"items": items}
-            bot2.save_state(items)
+            bot2.save_state(account, items)
 
             if expiry_reported:
-                log("BOT2", "session is working again - back to normal")
-                notifier.send("✅ <b>FirstCry session restored</b>\n\n"
-                              "Bot 2 is watching your cart again.")
+                log(tag, "session is working again - back to normal")
+                notifier.send(f"✅ <b>FirstCry session restored"
+                              f"{notifier._who(account.name)}</b>\n\n"
+                              "Bot 2 is watching this cart again.")
             consecutive_failures = 0
             expiry_reported = False
 
@@ -99,26 +101,26 @@ def run_bot2() -> None:
                 quiet_since = now
                 deliverable = sum(1 for v in items.values()
                                   if v.get("deliverable"))
-                log("BOT2", f"still watching - {len(items)} on shortlist, "
-                            f"{deliverable} deliverable to {config.PINCODE}")
+                log(tag, f"still watching - {len(items)} on shortlist, "
+                         f"{deliverable} deliverable to {account.pincode}")
 
         except fa.SessionExpired as exc:
             consecutive_failures += 1
             if consecutive_failures < FAILURES_BEFORE_ALERT:
-                log("BOT2", f"session read failed ({consecutive_failures}/"
+                log(tag, f"session read failed ({consecutive_failures}/"
                             f"{FAILURES_BEFORE_ALERT}) - could be a blip: {exc}")
             elif not expiry_reported:
-                log("BOT2", f"SESSION EXPIRED after {consecutive_failures} "
+                log(tag, f"SESSION EXPIRED after {consecutive_failures} "
                             f"failed checks: {exc}")
-                log("BOT2", "Fix with: python import_cookies.py")
-                log("BOT2", f"Still retrying every {RETRY_WHEN_EXPIRED:.0f}s - "
+                log(tag, "Fix with: python import_cookies.py")
+                log(tag, f"Still retrying every {RETRY_WHEN_EXPIRED:.0f}s - "
                             f"drop in a new session.json and it resumes itself.")
-                notifier.send_session_expired()
+                notifier.send_session_expired(account.name)
                 expiry_reported = True
         except requests.RequestException as exc:
-            log("BOT2", f"network problem, retrying: {exc}")
+            log(tag, f"network problem, retrying: {exc}")
         except Exception as exc:
-            log("BOT2", f"unexpected error, continuing: {exc}")
+            log(tag, f"unexpected error, continuing: {exc}")
 
         # Sleep only what's left of the interval - the checks themselves take
         # a couple of seconds, so sleeping a full interval afterwards made a
@@ -137,8 +139,11 @@ def main() -> int:
     print("=" * 62)
     print(f"  Pincode      : {config.PINCODE}")
     print(f"  Bot 1        : new listings, every {config.BOT1_INTERVAL_HOURS:g}h")
+    _accounts = config.load_accounts()
     print(f"  Bot 2        : shortlist deliverability, every "
           f"{config.BOT2_INTERVAL_SECONDS:g}s")
+    print(f"  Accounts     : "
+          + (", ".join(a.name for a in _accounts) if _accounts else "NONE"))
     print(f"  Auto-add     : {'on' if config.AUTO_ADD_TO_CART else 'off'}")
     print(f"  Telegram     : {'connected' if config.telegram_ready() else 'NOT SET UP'}")
     print("=" * 62)
@@ -149,14 +154,19 @@ def main() -> int:
         log("SETUP", "Telegram isn't configured - alerts will print here only.")
         log("SETUP", "Fix with: python setup_telegram.py")
 
-    if not config.SESSION_FILE.exists():
-        log("SETUP", "No session.json - Bot 2 cannot run without it.")
+    threads = [threading.Thread(target=run_bot1, name="bot1", daemon=True)]
+
+    if not _accounts:
+        log("SETUP", "No account session found - Bot 2 cannot run.")
         log("SETUP", "Fix with: python import_cookies.py")
         log("SETUP", "Starting Bot 1 only.\n")
-        threads = [threading.Thread(target=run_bot1, name="bot1", daemon=True)]
     else:
-        threads = [threading.Thread(target=run_bot1, name="bot1", daemon=True),
-                   threading.Thread(target=run_bot2, name="bot2", daemon=True)]
+        # One thread per account, so a slow or dead account never holds up
+        # the others.
+        for account in _accounts:
+            threads.append(threading.Thread(
+                target=run_bot2, args=(account,),
+                name=f"bot2-{account.name}", daemon=True))
 
     for t in threads:
         t.start()

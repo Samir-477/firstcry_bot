@@ -42,21 +42,23 @@ def log(msg: str) -> None:
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
-def load_state() -> dict:
-    if not config.WISHLIST_STATE_FILE.exists():
+def load_state(account: config.Account) -> dict:
+    if not account.state_file.exists():
         return {}
     try:
-        with open(config.WISHLIST_STATE_FILE, encoding="utf-8") as fh:
+        with open(account.state_file, encoding="utf-8") as fh:
             return json.load(fh)
     except (json.JSONDecodeError, OSError) as exc:
-        log(f"Could not read state file ({exc}); treating as empty.")
+        log(f"[{account.name}] Could not read state file ({exc}); "
+            f"treating as empty.")
         return {}
 
 
-def save_state(items: dict) -> None:
+def save_state(account: config.Account, items: dict) -> None:
     payload = {"updated": datetime.now().isoformat(timespec="seconds"),
+               "account": account.name,
                "items": items}
-    with open(config.WISHLIST_STATE_FILE, "w", encoding="utf-8") as fh:
+    with open(account.state_file, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
 
 
@@ -103,15 +105,16 @@ def _cart_writes(cookies, pids: list[str], action: str,
     return done
 
 
-def check_once(state: dict, attempt_adds: bool = True) -> tuple[dict, int]:
+def check_once(account: config.Account, state: dict,
+               attempt_adds: bool = True) -> tuple[dict, int]:
     """One pass. Returns (new_state, number_of_alerts).
 
     The add API replies "true" whether or not an item really went in, so
     its answer is ignored; the cart is re-read to see what actually landed.
     """
-    cookies = fa.load_cookies()
+    cookies = fa.load_cookies(account.session_file)
 
-    wishlist = fa.fetch_wishlist(cookies)
+    wishlist = fa.fetch_wishlist(cookies, account.pincode)
     cart = {c["pid"]: c for c in fa.fetch_cart(cookies)}
 
     old = state.get("items", {})
@@ -134,7 +137,7 @@ def check_once(state: dict, attempt_adds: bool = True) -> tuple[dict, int]:
             added = len(_cart_writes(cookies, todo, "add"))
             cart = {c["pid"]: c for c in fa.fetch_cart(cookies)}
             if added:
-                log(f"  added {added} item(s) to the cart"
+                log(f"[{account.name}]   added {added} item(s) to the cart"
                     + (f" ({len(todo) - added} refused - out of stock)"
                        if added < len(todo) else ""))
 
@@ -158,96 +161,93 @@ def check_once(state: dict, attempt_adds: bool = True) -> tuple[dict, int]:
     for pid in set(new_state) - set(cart):
         new_state[pid]["in_cart"] = False
 
-    log(f"Shortlist: {len(wishlist)} | in cart: {len(cart)} | "
-        f"deliverable to {config.PINCODE}: {len(deliverable_now)}")
+    log(f"[{account.name}] Shortlist: {len(wishlist)} | "
+        f"in cart: {len(cart)} | "
+        f"deliverable to {account.pincode}: {len(deliverable_now)}")
 
     if first_run:
         # Report what's already deliverable rather than staying silent.
         # Alerts only fire on a change, so anything deliverable at baseline
         # would otherwise never be mentioned - which looks like a broken bot.
-        log(f"First run - baseline saved. {len(deliverable_now)} already "
-            f"deliverable, sending a snapshot.")
+        log(f"[{account.name}] First run - baseline saved. "
+            f"{len(deliverable_now)} already deliverable, sending a snapshot.")
         notifier.send_status(deliverable_now, len(cart) - len(deliverable_now),
-                             config.PINCODE, title="Watching your cart")
+                             account.pincode, title="Watching your cart",
+                             account=account.name)
         return new_state, 0
 
     for item in became:
-        log(f"  *** DELIVERABLE NOW: {item['pid']} - {item['name'][:44]} "
-            f"(serv={item['servicable']})")
+        log(f"[{account.name}]   *** DELIVERABLE NOW: {item['pid']} - "
+            f"{item['name'][:44]} (serv={item['servicable']})")
 
     if became:
-        notifier.send_deliverable(became, config.PINCODE)
+        notifier.send_deliverable(became, account.pincode,
+                                  account=account.name)
 
     return new_state, len(became)
 
 
-def send_status() -> int:
+def send_status(accounts: list[config.Account] | None = None) -> int:
     """Report what's currently deliverable, without waiting for a change."""
-    try:
-        cart = fa.fetch_cart(fa.load_cookies())
-    except fa.SessionExpired as exc:
-        log(f"SESSION EXPIRED: {exc}")
-        notifier.send_session_expired()
-        return 1
-    except requests.RequestException as exc:
-        log(f"Could not reach FirstCry: {exc}")
+    accounts = accounts if accounts is not None else config.load_accounts()
+    if not accounts:
+        log("No accounts configured - run import_cookies.py first.")
         return 1
 
-    deliverable = [c for c in cart if c["deliverable"]]
-    waiting = len(cart) - len(deliverable)
+    rc = 0
+    for account in accounts:
+        try:
+            cart = fa.fetch_cart(fa.load_cookies(account.session_file))
+        except fa.SessionExpired as exc:
+            log(f"[{account.name}] SESSION EXPIRED: {exc}")
+            notifier.send_session_expired(account.name)
+            rc = 1
+            continue
+        except requests.RequestException as exc:
+            log(f"[{account.name}] Could not reach FirstCry: {exc}")
+            rc = 1
+            continue
 
-    log(f"Cart: {len(cart)} items | {len(deliverable)} deliverable | {waiting} waiting")
-    for c in deliverable:
-        log(f"   {c['pid']}  serv={c['servicable']}  {c['name'][:46]}")
+        deliverable = [c for c in cart if c["deliverable"]]
+        waiting = len(cart) - len(deliverable)
 
-    notifier.send_status(deliverable, waiting, config.PINCODE)
+        log(f"[{account.name}] Cart: {len(cart)} items | "
+            f"{len(deliverable)} deliverable | {waiting} waiting")
+        for c in deliverable:
+            log(f"   {c['pid']}  serv={c['servicable']}  {c['name'][:46]}")
+
+        notifier.send_status(deliverable, waiting, account.pincode,
+                             account=account.name)
     log("Status sent to Telegram.")
-    return 0
+    return rc
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="FirstCry shortlist deliverability watcher")
-    ap.add_argument("--loop", action="store_true",
-                    help=f"run forever, checking every {config.BOT2_INTERVAL_SECONDS:g}s")
-    ap.add_argument("--reset", action="store_true", help="clear saved state")
-    ap.add_argument("--status", action="store_true",
-                    help="Telegram a snapshot of what's deliverable right now")
-    args = ap.parse_args()
-
-    if args.status:
-        return send_status()
-
-    if args.reset and config.WISHLIST_STATE_FILE.exists():
-        config.WISHLIST_STATE_FILE.unlink()
-        log("State cleared.")
-
-    if not config.telegram_ready():
-        log("WARNING: Telegram not configured - alerts will print here only.")
-
-    state = load_state()
+def watch(account: config.Account, loop: bool) -> int:
+    """Run one account, once or forever."""
+    state = load_state(account)
 
     def one_pass(attempt_adds: bool = True) -> bool:
         """False means stop - the session is gone."""
         nonlocal state
         try:
-            items, _ = check_once(state, attempt_adds=attempt_adds)
+            items, _ = check_once(account, state, attempt_adds=attempt_adds)
             state = {"items": items}
-            save_state(items)
+            save_state(account, items)
             return True
         except fa.SessionExpired as exc:
-            log(f"SESSION EXPIRED: {exc}")
-            notifier.send_session_expired()
+            log(f"[{account.name}] SESSION EXPIRED: {exc}")
+            notifier.send_session_expired(account.name)
             return False
         except requests.RequestException as exc:
-            log(f"Network problem, will retry: {exc}")
+            log(f"[{account.name}] Network problem, will retry: {exc}")
             return True
 
-    if not args.loop:
+    if not loop:
         return 0 if one_pass() else 1
 
     interval = config.BOT2_INTERVAL_SECONDS
     every = max(1, int(config.ADD_TO_CART_EVERY_N_CHECKS))
-    log(f"Loop mode: checking every {interval:g}s, "
+    log(f"[{account.name}] Loop mode: checking every {interval:g}s, "
         f"trying cart adds every {every} checks. Ctrl+C to stop.")
     cycle = 0
     while True:
@@ -260,7 +260,7 @@ def main() -> int:
             log("Stopped.")
             return 0
         except Exception as exc:
-            log(f"Unexpected error, continuing: {exc}")
+            log(f"[{account.name}] Unexpected error, continuing: {exc}")
 
         # Sleep only the time left in this interval. Sleeping a full interval
         # AFTER the work makes each cycle take work + interval, so a 60s
@@ -270,6 +270,70 @@ def main() -> int:
         except KeyboardInterrupt:
             log("Stopped.")
             return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="FirstCry shortlist deliverability watcher")
+    ap.add_argument("--loop", action="store_true",
+                    help=f"run forever, checking every "
+                         f"{config.BOT2_INTERVAL_SECONDS:g}s")
+    ap.add_argument("--reset", action="store_true", help="clear saved state")
+    ap.add_argument("--status", action="store_true",
+                    help="Telegram a snapshot of what's deliverable right now")
+    ap.add_argument("--account", metavar="NAME",
+                    help="only this account (default: all of them)")
+    args = ap.parse_args()
+
+    accounts = config.load_accounts()
+    if args.account:
+        accounts = [a for a in accounts if a.name == args.account]
+        if not accounts:
+            log(f"No account named {args.account!r}. Found: "
+                f"{[a.name for a in config.load_accounts()]}")
+            return 1
+
+    if not accounts:
+        log("No accounts configured.")
+        log("Put a session file at session.json, or several in accounts/.")
+        log("Create one with:  python import_cookies.py")
+        return 1
+
+    if len(accounts) > 1:
+        log(f"Accounts: {', '.join(a.name for a in accounts)}")
+
+    if args.status:
+        return send_status(accounts)
+
+    if args.reset:
+        for account in accounts:
+            if account.state_file.exists():
+                account.state_file.unlink()
+                log(f"[{account.name}] State cleared.")
+
+    if not config.telegram_ready():
+        log("WARNING: Telegram not configured - alerts will print here only.")
+
+    # Running several accounts in one loop would make each wait on the
+    # others. run_all.py gives each its own thread; here we keep it simple
+    # and run them in turn, which is fine for a one-shot check.
+    if not args.loop:
+        return max(watch(a, loop=False) for a in accounts)
+
+    if len(accounts) == 1:
+        return watch(accounts[0], loop=True)
+
+    import threading
+    threads = [threading.Thread(target=watch, args=(a, True),
+                                name=a.name, daemon=True) for a in accounts]
+    for t in threads:
+        t.start()
+    try:
+        while any(t.is_alive() for t in threads):
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        log("Stopped.")
+    return 0
 
 
 if __name__ == "__main__":

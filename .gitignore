@@ -1,8 +1,10 @@
 # Secrets - NEVER commit these.
-# .env          holds your Telegram bot token
-# session.json  is a live FirstCry login - anyone with it is logged in as you
+# .env             holds your Telegram bot token
+# session.json     is a live FirstCry login - anyone with it is logged in as you
+# accounts/*.json  same thing, one per account
 .env
 session.json
+accounts/*.json
 
 # Runtime state - regenerated on first run, and the bots Telegram you a
 # snapshot when they reseed. Committing it would only cause conflicts.

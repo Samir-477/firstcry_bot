@@ -52,6 +52,28 @@ requests
 python-dotenv
 ```
 
+### Watching more than one account
+
+Drop a session file per account into `accounts/`:
+
+```
+accounts/samir.json
+accounts/priya.json
+```
+
+Each gets its own thread, its own state, and its own label on every alert.
+Deliverability comes from each account's own cart, so different delivery
+addresses work with no extra configuration.
+
+With the folder empty, a single `session.json` in the project root is used
+instead - existing setups keep working unchanged. See
+[accounts/README.md](accounts/README.md).
+
+```bash
+python bot2_wishlist.py --status              # all accounts
+python bot2_wishlist.py --account samir       # just one
+```
+
 ### What is NOT in this repo
 
 `.env`, `session.json` and `state/` are gitignored. The first two are

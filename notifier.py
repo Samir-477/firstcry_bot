@@ -176,12 +176,19 @@ def send_new_products(new_items: list[dict],
 # Bot 2 - cart deliverability and wishlist restocks
 # --------------------------------------------------------------------------
 
-def send_deliverable(items: list[dict], pincode: str) -> None:
+def _who(account: str | None) -> str:
+    """Label which account an alert is about, but stay quiet when there's
+    only the one - no point cluttering every message with "default"."""
+    return f" · {html.escape(account)}" if account and account != "default" else ""
+
+
+def send_deliverable(items: list[dict], pincode: str,
+                     account: str | None = None) -> None:
     """The headline alert: cart items you can finally order."""
     if not items:
         return
     what = "item is" if len(items) == 1 else f"{len(items)} items are"
-    header = (f"🟢 <b>Deliverable now</b>\n"
+    header = (f"🟢 <b>Deliverable now{_who(account)}</b>\n"
               f"<i>{what} now shippable to {pincode}</i>\n")
 
     blocks = []
@@ -221,14 +228,14 @@ def send_back_in_stock(items: list[dict]) -> None:
 
 
 def send_status(deliverable: list[dict], waiting: int, pincode: str,
-                title: str = "Cart status") -> None:
+                title: str = "Cart status", account: str | None = None) -> None:
     """A snapshot of where things stand right now.
 
     Unlike the alerts, this reports current state rather than a change - for
     when you want to see what's orderable without waiting for something to
     flip.
     """
-    header = (f"📋 <b>{title}</b>\n"
+    header = (f"📋 <b>{title}{_who(account)}</b>\n"
               f"<i>{len(deliverable)} deliverable to {pincode}"
               f"{f', {waiting} still waiting' if waiting else ''}</i>\n")
 
@@ -247,7 +254,8 @@ def send_status(deliverable: list[dict], waiting: int, pincode: str,
     _send_blocks(header, blocks, footer)
 
 
-def send_session_expired() -> None:
-    send("⚠️ <b>FirstCry session expired</b>\n\n"
-         "Bot 2 has stopped watching.\n\n"
-         "To fix, run:\n<code>python import_cookies.py</code>")
+def send_session_expired(account: str | None = None) -> None:
+    send(f"⚠️ <b>FirstCry session expired{_who(account)}</b>\n\n"
+         "Bot 2 has stopped watching this account.\n\n"
+         "To fix, run:\n<code>python import_cookies.py</code>\n"
+         "then put the new session file back in place.")
