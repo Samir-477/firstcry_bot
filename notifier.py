@@ -187,7 +187,7 @@ def send_deliverable(items: list[dict], pincode: str,
     """The headline alert: cart items you can finally order."""
     if not items:
         return
-    what = "item is" if len(items) == 1 else f"{len(items)} items are"
+    what = "1 item is" if len(items) == 1 else f"{len(items)} items are"
     header = (f"🟢 <b>Deliverable now{_who(account)}</b>\n"
               f"<i>{what} now shippable to {pincode}</i>\n")
 
@@ -255,7 +255,11 @@ def send_status(deliverable: list[dict], waiting: int, pincode: str,
 
 
 def send_session_expired(account: str | None = None) -> None:
+    # Give the exact command, account and all - you'll be reading this on a
+    # phone and wanting to copy it, not work out which flag to add.
+    flag = f" --account {account}" if account and account != "default" else ""
     send(f"⚠️ <b>FirstCry session expired{_who(account)}</b>\n\n"
-         "Bot 2 has stopped watching this account.\n\n"
-         "To fix, run:\n<code>python import_cookies.py</code>\n"
-         "then put the new session file back in place.")
+         "Bot 2 has stopped watching this account. Other accounts carry on.\n\n"
+         f"To fix:\n<code>python import_cookies.py{flag}</code>\n\n"
+         "It picks the new session up on its own within 5 minutes - "
+         "no restart needed.")
