@@ -91,10 +91,15 @@ def _cart_writes(cookies, pids: list[str], action: str,
         todo = [p for p in todo if p not in settled]
 
         if todo and attempt < attempts - 1:
-            log(f"      {len(todo)} {action}(s) didn't stick, retrying")
+            log(f"      {len(settled)} of {len(settled) + len(todo)} {action}s "
+                f"landed, retrying the rest")
 
     if todo:
-        log(f"      gave up on {len(todo)} {action}(s) after {attempts} tries")
+        # After several paced attempts these are almost certainly out of
+        # stock rather than dropped writes - FirstCry accepts the request
+        # and silently declines to put the item in the cart.
+        log(f"      {len(todo)} {action}(s) not accepted "
+            f"(out of stock) - will try again next sweep")
     return done
 
 
