@@ -1,0 +1,25 @@
+[Unit]
+Description=FirstCry Hot Wheels Bots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/home/botuser/first_cry
+ExecStart=/home/botuser/first_cry/venv/bin/python run_all.py
+
+# Restart on any crash, but back off so a broken config doesn't spin forever.
+Restart=always
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Unbuffered so journalctl shows output immediately.
+Environment=PYTHONUNBUFFERED=1
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
